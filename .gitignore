@@ -1,0 +1,6 @@
+*~
+build/
+
+# Bochs output
+bochsout.txt
+parport.out
