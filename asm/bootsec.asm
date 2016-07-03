@@ -44,7 +44,8 @@ boot:
 	; game methods
 	call alloc_board
 	call draw_board
-	
+	call draw_brick
+
 	; loop
 	jmp $
 
@@ -59,16 +60,12 @@ _set_render_dest:
 ; fill border with characters
 
 %define BORDER_WORD	0x0F2B
-%define BACKGROUND_WORD	0x022E
+%define BACKGROUND_WORD	0x082E
 
 alloc_board:
-	push bp
-	mov bp, sp
-	
 	; clear memory with zeros
 	mov cx, BOARD_SIZE
 	xor si, si
-	xor bx, bx
 	.alloc_byte:
 		; left border
 		mov ax, si
@@ -82,7 +79,6 @@ alloc_board:
 		mov ax, BOARD_WIDTH
 		imul ax, 0x2
 		sub ax, cx
-		mov bx, BOARD_WIDTH
 		xor dx, dx
 		div bx
 		cmp dx, 0x0
@@ -111,9 +107,6 @@ alloc_board:
 
 			inc si
 			loop alloc_board.alloc_byte
-
- 	mov sp, bp
-  	pop bp
 	ret
 
 ; draw game board
@@ -131,7 +124,8 @@ draw_board:
 	.loop:	
 		cmp si, 0x0
 		je print
-
+		
+		; move to next line if bx % BOARD_WIDTH == 0
 		push bx
 		mov ax, si
 		mov bx, BOARD_WIDTH	
@@ -139,10 +133,9 @@ draw_board:
 		div bx
 		cmp dx, 0x0
 		pop bx
-		jnz print
 
-		add bx, %[SCREEN_WIDTH * 2]
-		sub bx, %[BOARD_WIDTH * 2]
+		jnz print
+		add bx, %[(SCREEN_WIDTH - BOARD_WIDTH) * 2]
 
 		print:
 			push si
@@ -152,11 +145,117 @@ draw_board:
 			pop si
 
 			call _draw_character
-			; xchg bx, bx
+
+			; increment line
 			add bx, 0x2
 			inc si
 			loop draw_board.loop
 	ret
+
+; draw single brick
+draw_brick:
+	push bp
+	mov bp, sp
+
+	; template: bp - 0x2
+	sub sp, 0x2
+
+	; get brick row index
+	lea bx, [bricks]
+	mov ax, [brick_index]
+	imul ax, 0x8
+	add bx, ax
+	
+	; get brick rotation template
+	mov si, [brick_rot]
+	imul si, 0x2
+	mov ax, [ds:bx + si]
+	mov [bp - 0x2], ax
+
+	; move brick template bits to right side
+	; shr ax, 0x10
+
+	; get brick position relative to board
+	; todo: remove movzx, push - replace it with single mnemonic
+	mov bx, [brick_pos]
+	movzx dx, bl
+	push dx
+	movzx dx, bh
+	push dx
+	push SCREEN_WIDTH
+	call _coord_to_offset
+	
+	; translate to board position
+	add bx, %[BOARD_POS * 2]
+	
+	; render brick template from ax
+	; loop 16 times because word
+	mov cx, 0x10
+	xor si, si
+	.loop:
+		; write new line if 4th
+		cmp si, 0x0
+		jz .print
+
+		push bx
+			mov ax, si
+			mov bx, 0x4
+			xor dx, dx
+			div bx
+		pop bx
+		cmp dx, 0x0
+
+		jne .print
+		add bx, %[(SCREEN_WIDTH - 0x4) * 2]
+		.print:
+			; extract bits
+			mov ax, [bp - 0x2]
+			shr ax, 0x1
+			mov [bp - 0x2], ax
+			and ax, 0x1
+			jz .continue
+
+			; character
+			push si
+				; word size is 2B, video memory has word pixels format
+				imul si, 0x2
+
+				; empty character
+				mov byte [es:bx + si], '#'
+
+				; background color
+				mov dl, [brick_col]
+				mov byte [es:bx + si + 1], dl
+			pop si
+		.continue:
+			inc si
+			loop .loop
+	
+ 	mov sp, bp
+  	pop bp
+	ret
+
+; change coordinate to offset
+; arg1 - position x
+; arg2 - position y
+; arg3 - width of array(not height)
+; return bx
+_coord_to_offset:
+	push bp
+	mov bp, sp
+	
+ 	; calc start position in mem
+	push ax
+	mov ax, [bp + 6]	; position y
+	imul ax,  [bp + 4] 	; 40 characters width
+	add ax, [bp + 8]        ; position x
+	imul ax, 2		; mul offset
+	mov bx, ax
+	pop ax
+
+ 	mov sp, bp
+  	pop bp
+	ret 0x6
 
 ; print string
 ; arg1 - string address
@@ -175,20 +274,19 @@ _draw_string:
 	mov cx, [bp + 10]
 	
  	; calc start position in mem
-	mov ax, [bp + 4]
-	imul ax, SCREEN_WIDTH ; 40 characters width
-	add ax, [bp + 6]
-	imul ax, 2
-	mov bx, ax
+	push word [bp + 6]
+	push word [bp + 4]
+	push SCREEN_WIDTH
+	call _coord_to_offset
 
 	; character color
 	mov dx, [bp + 8]
 
-	._draw_character:
+	.loop:
 		lodsb
 		call _draw_character
 		add bx, 0x2
-		loop ._draw_character
+		loop .loop
 
  	mov sp, bp
   	pop bp
@@ -204,7 +302,27 @@ _draw_character:
 	ret
 
 ; custom variables
-title: db 'TETRIS'
+title:	db 'TETRIS'
 
+; bricks
+; 1110 0010 1000 1100
+; 0010 0110 1110 1000
+; 0000 0000 0000 1000
+; 0000 0000 0000 0000
+
+; 1. 1110001000000000 = 0xE200
+; 2. 0010011000000000 = 0x2600
+; 3. 1000111000000000 = 0x8E00
+; 4. 0000100010001100 = 0xC880
+bricks:
+	; L
+	dw 0x2E0, 0x620, 0xE80, 0x88C
+
+; gameplay variables
+brick_index: 	dw 0x0		; 0 - 4
+brick_rot: 	dw 0x0		; 0 - 4
+brick_pos:	dw 0x0205	; x: 03 y: 00
+brick_col:	db 0x9
+	
 times 510 - ($-$$) db 0
 dw 0xAA55
