@@ -4,7 +4,7 @@
 ## Todo
 - [x] Booting bootsec with graphical mode
 - [x] Rendering text on screen
-- [ ] Rendering tetris board
+- [x] Rendering tetris board
 - [ ] Rendering bricks
 - [ ] Basic tetris logic
 - [ ] Basic beep sound(if 1KB will be enough)
